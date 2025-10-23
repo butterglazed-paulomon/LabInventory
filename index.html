@@ -1,0 +1,181 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PNC Tool Inventory</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 20px; max-width: 900px; }
+    header { display:flex; gap:12px; align-items:center; margin-bottom:16px; }
+    .hidden { display:none; }
+    input, textarea, select, button { padding:8px; font-size:14px; }
+    table { border-collapse: collapse; width:100%; }
+    th, td { border:1px solid #ddd; padding:8px; vertical-align: top; }
+    th { background:#f6f6f6; }
+    .row { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; }
+    .toolbar { display:flex; gap:8px; align-items: center; margin: 8px 0; }
+    .danger { background:#ffe8e8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>PNC Tool Inventory</h2>
+    <span id="status"></span>
+    <div style="margin-left:auto">
+      <button id="logoutBtn" class="hidden">Log out</button>
+    </div>
+  </header>
+
+  <!-- LOGIN -->
+  <section id="loginView">
+    <p>Enter password to continue.</p>
+    <input id="pw" type="tinapay123" placeholder="Password" />
+    <button id="loginBtn">Login</button>
+    <div id="loginMsg"></div>
+  </section>
+
+  <!-- APP -->
+  <section id="appView" class="hidden">
+    <h3>Enroll Equipment</h3>
+    <div class="row">
+      <input id="prefix" placeholder="Prefix (e.g., PNC)" value="PNC"/>
+      <input id="building" placeholder="Building (e.g., BCH)"/>
+      <input id="department" placeholder="Department (e.g., Nursing)"/>
+      <input id="lab" placeholder="Lab (e.g., Micro)"/>
+      <input id="name" placeholder="Name (e.g., Microscope)"/>
+      <input id="desc" placeholder="Description"/>
+    </div>
+    <div class="toolbar">
+      <button id="addBtn">Enroll</button>
+      <span id="addMsg"></span>
+    </div>
+
+    <h3>Tools</h3>
+    <div class="toolbar">
+      <button id="refreshBtn">Refresh</button>
+      <input id="q" placeholder="Filter…" />
+    </div>
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th>Code</th><th>Name</th><th>Dept</th><th>Building</th><th>Lab</th><th>Description</th><th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+<script>
+const API_BASE = 'https://script.google.com/macros/s/AKfycbwoxAxcswIWkMyOrPrIK_GZMBT9f_anKC9Lwd7-ibObBxkb04i8-krAHuweXGYY88Qs/exec'; // <-- paste your Web App URL
+let token = localStorage.getItem('pnc_token') || '';
+
+function api(path, method='GET', body) {
+  const headers = { 'Content-Type':'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(API_BASE + path, opts).then(r => r.json());
+}
+
+/*** auth ***/
+const loginView = document.getElementById('loginView');
+const appView   = document.getElementById('appView');
+const loginBtn  = document.getElementById('loginBtn');
+const logoutBtn = document.getElementById('logoutBtn');
+const loginMsg  = document.getElementById('loginMsg');
+
+function setLoggedIn(ok){
+  loginView.classList.toggle('hidden', ok);
+  appView.classList.toggle('hidden', !ok);
+  logoutBtn.classList.toggle('hidden', !ok);
+}
+
+loginBtn.onclick = async () => {
+  loginMsg.textContent = '…';
+  const pw = document.getElementById('pw').value;
+  const res = await api('/login','POST',{password: pw});
+  if (res.token){
+    token = res.token; localStorage.setItem('pnc_token', token);
+    setLoggedIn(true); loadTools(); loginMsg.textContent='';
+  } else {
+    loginMsg.textContent = res.error || 'Login failed';
+  }
+};
+logoutBtn.onclick = () => { token=''; localStorage.removeItem('pnc_token'); setLoggedIn(false); };
+
+/*** enroll ***/
+document.getElementById('addBtn').onclick = async () => {
+  const payload = {
+    prefix: getVal('prefix'),
+    building: getVal('building'),
+    department: getVal('department'),
+    lab: getVal('lab'),
+    name: getVal('name'),
+    description: getVal('desc')
+  };
+  const res = await api('/tools','POST',payload);
+  document.getElementById('addMsg').textContent = res.code ? `Saved: ${res.code}` : (res.error||'Error');
+  if (res.code) { clearEnroll(); loadTools(); }
+};
+
+function getVal(id){ return document.getElementById(id).value.trim(); }
+function clearEnroll(){ ['name','desc'].forEach(id=>document.getElementById(id).value=''); }
+
+/*** list + inline edit/delete ***/
+const tbody = document.querySelector('#tbl tbody');
+const q = document.getElementById('q');
+
+async function loadTools(){
+  const res = await api('/tools');
+  const items = (res.items||[]);
+  render(items);
+}
+
+function render(items){
+  const term = q.value.toLowerCase();
+  const rows = items.filter(x =>
+    !term || Object.values(x).join(' ').toLowerCase().includes(term)
+  ).map(x => `
+    <tr data-id="${x.id}">
+      <td>${x.code||''}</td>
+      <td><input value="${x.name||''}"></td>
+      <td><input value="${x.department||''}"></td>
+      <td><input value="${x.building||''}"></td>
+      <td><input value="${x.lab||''}"></td>
+      <td><input value="${x.description||''}"></td>
+      <td>
+        <button class="save">Save</button>
+        <button class="del danger">Delete</button>
+      </td>
+    </tr>`).join('');
+  tbody.innerHTML = rows || '<tr><td colspan="7">No items</td></tr>';
+}
+
+tbody.addEventListener('click', async (e)=>{
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const id = tr.dataset.id;
+  if (e.target.classList.contains('save')){
+    const [name, dept, bldg, lab, desc] = [...tr.querySelectorAll('input')].map(i=>i.value);
+    await api(`/tools/${id}`, 'POST', {_method:'PUT', name, department:dept, building:bldg, lab, description:desc});
+    loadTools(); return;
+  }
+  if (e.target.classList.contains('del')){
+    if (!confirm('Delete this tool?')) return;
+    await api(`/tools/${id}`, 'POST', {_method:'DELETE'});
+    loadTools(); return;
+  }
+});
+
+q.oninput = ()=>{ loadTools(); };
+
+/*** try resume session ***/
+(async function bootstrap(){
+  if (!token){ setLoggedIn(false); return; }
+  // quick ping with a harmless GET to see if token still valid
+  const res = await api('/tools');
+  if (res.items) { setLoggedIn(true); render(res.items); }
+  else { setLoggedIn(false); }
+})();
+</script>
+</body>
+</html>
